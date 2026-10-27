@@ -22,6 +22,8 @@ class DebugGateTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
+        self.repo = g.root_for(str(self.repo))
         (self.repo / "src").mkdir()
         (self.repo / "src" / "a.py").write_text("x=1\n")
         (self.repo / "src" / "b.py").write_text("x=2\n")
@@ -59,7 +61,7 @@ class DebugGateTest(unittest.TestCase):
 
     def capture(self, fail=True):
         self.run_cli("capture", "--", sys.executable, "-m", "unittest", "test_failure" if fail else "test_success")
-        self.run_cli("probe", "--", "rg", "x=1", "src/a.py")
+        self.run_cli("probe", "--", "git", "status", "--short")
 
     def explain(self):
         self.run_cli("explain", "--hypothesis", "a condição da função falha em entrada vazia",
