@@ -1,0 +1,19 @@
+{
+  "description": "StarIA Debug Gate: opt-in pre-edit evidence checks for Codex-supported local tools.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/debug_gate.py\" hook",
+            "commandWindows": "py -3 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'hooks','debug_gate.py'),run_name='__main__')\"",
+            "timeout": 10,
+            "statusMessage": "StarIA Debug Gate: verificando evidências antes da alteração"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+# Local debug gate data
+.staria-debug-gate/
+# Editors and OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# Credentials
+.env
+.env.*
+!.env.example

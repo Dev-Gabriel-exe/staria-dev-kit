@@ -1,0 +1,38 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "author": {
+    "name": "Garbem"
+  },
+  "description": "18 skills autorais para desenvolvimento full-stack com orçamento zero e curadoria do Frontend Motion Lab PRO (45 ferramentas).",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "capabilities": [],
+        "category": "Developer Tools",
+        "defaultPrompt": [
+          "Crie uma interface profissional e teste responsividade, acessibilidade e performance.",
+          "Projete um backend robusto com custo de hospedagem R$ 0.",
+          "Quais ferramentas do catálogo são adequadas para este frontend?"
+        ],
+        "developerName": "Garbem",
+        "displayName": "StarIA Dev Kit",
+        "longDescription": "18 skills autorais de frontend, backend, IA, QA, segurança e deploy sem custos obrigatórios. Inclui catálogo curado de 45 ferramentas do Frontend Motion Lab PRO e referências a plugins já instalados, sem duplicação de conexões.",
+        "shortDescription": "Skills para desenvolvimento"
+      },
+      "hooks": "./hooks/hooks.json"
+    }
+  },
+  "keywords": [
+    "frontend",
+    "backend",
+    "react",
+    "nextjs",
+    "testing",
+    "security",
+    "skills",
+    "threejs",
+    "staria"
+  ],
+  "name": "staria-dev-kit",
+  "version": "0.1.2"
+}
