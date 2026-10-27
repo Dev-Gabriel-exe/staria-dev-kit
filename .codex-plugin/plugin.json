@@ -14,7 +14,7 @@
   },
   "hooks": "./hooks/hooks.json",
   "name": "staria-dev-kit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "18 skills autorais para desenvolvimento full-stack com orçamento zero e curadoria do Frontend Motion Lab PRO (45 ferramentas).",
   "author": {
     "name": "Garbem"

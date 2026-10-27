@@ -1,4 +1,4 @@
-# StarIA Debug Gate — Teste de aceitação v0.1.2
+# StarIA Debug Gate — Teste de aceitação v0.1.3
 
 Este roteiro serve a **um repositório descartável**, não ao código de um cliente. Preserve backups e alterações locais. O plugin usado é o **StarIA Dev Kit**, não a aplicação da loja de calçados.
 
@@ -49,7 +49,7 @@ Teste também a tentativa via Bash e uma ferramenta desconhecida. Se algum camin
 
 ## 5. Teste de liberação legítima
 
-Abra incidente `begin --issue ... --scope ...`. Execute `capture` de um teste que falha, `probe` diagnóstico real, `explain` e `approve`. Antes de `approve`, patch deve ser negado. Depois dele, patch no escopo deve ser permitido; fora do escopo, negado. Após alterar, `verify` deve executar **o mesmo comando do `capture`** e retornar exit 0. Só então `close` deve encerrar. `close --abort` cancela sem alegar sucesso. O modo `protect` continua ativo.
+Abra incidente `begin --issue ... --scope ...`. Execute `capture` de um teste que falha, `probe` diagnóstico real, `inspect --path <arquivo> --line <n>` e `explain` com `--evidence-path`, `--evidence-line`, `--code-quote`, `--failure-tag` observado, depois `approve`. Antes de `approve`, patch deve ser negado. Depois dele, patch no escopo deve ser permitido; fora do escopo, negado. Após alterar, `verify` deve executar **o mesmo comando do `capture`** e retornar exit 0. Só então `close` deve encerrar. `close --abort` cancela sem alegar sucesso. O modo `protect` continua ativo.
 
 ## 6. Reverter manualmente
 

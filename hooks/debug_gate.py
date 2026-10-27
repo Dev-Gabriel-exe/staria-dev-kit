@@ -19,6 +19,8 @@ import time
 STATE_TTL = 2 * 3600
 APPROVAL_TTL = 15 * 60
 MAX_INPUT = 1024 * 1024
+# Only structured, allowlisted error classes: never persist arbitrary test output.
+FAILURE_PATTERN = re.compile(r"\b(?:AssertionError|TypeError|ValueError|KeyError|IndexError|AttributeError|NameError|ImportError|ModuleNotFoundError|SyntaxError|ZeroDivisionError|RuntimeError|TimeoutError|TestFailure|FAILED|FAIL|ERROR)\b")
 READ_ONLY = re.compile(
     r"^(?:(?:pwd|ls|dir|cat|type|head|tail|rg|grep|Get-ChildItem|Get-Content)\b|"
     r"git\s+(?:status|diff|rev-parse|ls-files)\b)", re.I
@@ -163,6 +165,60 @@ def approval_valid(root: Path, state: dict) -> bool:
     return isinstance(recorded, dict) and recorded == baseline(root, list(recorded.get("files", {})))
 
 
+def source_line(root: Path, relative: str, number: int) -> str:
+    relative = valid_scope_path(relative)
+    target = root / relative
+    if (not isinstance(number, int) or number < 1 or number > 100000 or
+        not target.resolve().is_relative_to(root) or target.is_symlink() or
+        not target.is_file() or target.stat().st_size > 512000):
+        raise ValueError("arquivo de evidência inseguro, inexistente ou acima do limite")
+    try:
+        data = target.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise ValueError("evidência precisa ser texto UTF-8") from exc
+    lines = data.splitlines()
+    if number > len(lines):
+        raise ValueError("linha de evidência não existe")
+    line = lines[number - 1].strip()
+    if not line or line.startswith(("#", "//", "*", "<!--")):
+        raise ValueError("selecione uma linha executável ou de configuração, não um comentário")
+    return line
+
+
+def evidence_problem(root: Path, state: dict) -> str | None:
+    analysis = state.get("analysis")
+    reproduction = state.get("reproduction")
+    if not isinstance(analysis, dict) or not isinstance(reproduction, dict):
+        return "evidência estruturada ausente"
+    ev = analysis.get("evidence")
+    if not isinstance(ev, dict):
+        return "ausente vínculo entre erro observado, arquivo e linha inspecionada"
+    path, line_no = ev.get("path"), ev.get("line")
+    if not isinstance(path, str) or not isinstance(line_no, int) or not allowed_path(path, state.get("scope", [])):
+        return "linha de evidência fora do escopo"
+    matching = [i for i in state.get("inspections", []) if isinstance(i, dict) and i.get("path") == path and i.get("line") == line_no]
+    if not matching:
+        return "a linha precisa ter sido inspecionada de verdade com inspect"
+    try:
+        line = source_line(root, path, line_no)
+    except (ValueError, OSError) as exc:
+        return "fonte de evidência não verificável: " + str(exc)
+    digest = hashlib.sha256(line.encode("utf-8")).hexdigest()
+    if not any(i.get("sha256") == digest for i in matching):
+        return "linha alterada desde a inspeção; investigue novamente"
+    quote = ev.get("quote", "")
+    if not isinstance(quote, str) or len(quote.strip()) < 3 or len(quote) > 160 or quote not in line:
+        return "trecho citado não existe na linha real do código"
+    if quote not in str(analysis.get("root_cause", "")):
+        return "causa raiz não cita o trecho real do código"
+    tag = ev.get("failure_tag", "")
+    if tag not in reproduction.get("failure_tags", []):
+        return "categoria de falha não encontrada na execução original"
+    if tag not in str(analysis.get("investigation", "")):
+        return "investigação não relaciona a falha observada ao diagnóstico"
+    return None
+
+
 def deny(reason: str) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                    "permissionDecisionReason": "StarIA Debug Gate: " + reason}}
@@ -185,7 +241,7 @@ def gate_cli_command(command: str) -> bool:
     return bool(re.match(
         r"^\s*(?:(?:python|python3|py(?:\s+-3)?)\s+)?" + script +
         r"\s+(?:(?:--repo\s+(?:\"[^\"]+\"|'[^']+'|\S+)\s+))?" +
-        r"(?:begin|status|capture|probe|verify|explain|approve|close|protect)(?:\s|$)",
+        r"(?:begin|status|capture|probe|inspect|verify|explain|approve|close|protect)(?:\s|$)",
         command, re.I))
 
 def shell_read_only(command: str) -> bool:
@@ -310,11 +366,13 @@ def cli(argv: list[str]) -> int:
     beg = sub.add_parser("begin"); beg.add_argument("--issue", required=True); beg.add_argument("--scope", nargs="+", required=True)
     cap = sub.add_parser("capture"); cap.add_argument("command", nargs=argparse.REMAINDER)
     prb = sub.add_parser("probe"); prb.add_argument("command", nargs=argparse.REMAINDER)
+    insp = sub.add_parser("inspect"); insp.add_argument("--path", required=True); insp.add_argument("--line", required=True, type=int)
     ver = sub.add_parser("verify"); ver.add_argument("command", nargs=argparse.REMAINDER)
     sub.add_parser("protect"); sub.add_parser("unprotect")
     exp = sub.add_parser("explain")
-    for opt in ("hypothesis", "investigation", "root-cause", "regression"):
+    for opt in ("hypothesis", "investigation", "root-cause", "regression", "evidence-path", "code-quote", "failure-tag"):
         exp.add_argument("--" + opt, required=True)
+    exp.add_argument("--evidence-line", required=True, type=int)
     sub.add_parser("approve"); sub.add_parser("status")
     close = sub.add_parser("close"); close.add_argument("--abort", action="store_true")
     args = parser.parse_args(argv)
@@ -336,7 +394,7 @@ def cli(argv: list[str]) -> int:
             parser.error("descreva o incidente com pelo menos 12 caracteres")
         st = {"schema": 1, "root": str(root), "issue": args.issue.strip(), "scope": scopes,
               "status": "active", "created_at": time.time(), "reproduction": None,
-              "probes": [], "analysis": None, "approval": None, "verified": None}
+              "probes": [], "inspections": [], "analysis": None, "approval": None, "verified": None}
         save_state(root, st)
         print("Debug Gate: incidente aberto; alterações bloqueadas até approve.")
         return 0
@@ -380,10 +438,13 @@ def cli(argv: list[str]) -> int:
             rc = 124; output = (ex.stdout or b"")[:100000] + (ex.stderr or b"")[:100000]
         except OSError as ex:
             parser.error("comando não executado: " + str(ex))
+        # Only known error-class markers; no raw traceback or user data in persisted state.
+        failure_tags = sorted(set(FAILURE_PATTERN.findall(output.decode("utf-8", errors="replace"))))
         st["reproduction"] = {"exit_code": rc, "observed_at": time.time(),
+                              "failure_tags": failure_tags,
                               "command_sha256": hashlib.sha256(json.dumps(cmd).encode()).hexdigest(),
                               "output_sha256": hashlib.sha256(output).hexdigest(), "output_bytes": len(output)}
-        st["analysis"] = None; st["approval"] = None; st["probes"] = []; st["verified"] = None
+        st["analysis"] = None; st["approval"] = None; st["probes"] = []; st["inspections"] = []; st["verified"] = None
         save_state(root, st)
         print(f"Reprodução registrada: exit={rc}, bytes={len(output)}; saída bruta não foi armazenada.")
         return 0
@@ -403,6 +464,27 @@ def cli(argv: list[str]) -> int:
         st["analysis"] = None; st["approval"] = None; st["verified"] = None
         save_state(root, st)
         print("Investigação registrada: exit=%s, bytes=%s; saída bruta não armazenada." % (run.returncode, len(output)))
+        return 0
+    if args.action == "inspect":
+        path = valid_scope_path(args.path)
+        if not st.get("reproduction") or st["reproduction"].get("exit_code") == 0:
+            parser.error("capture uma falha real antes de inspecionar o código")
+        if not allowed_path(path, st.get("scope", [])):
+            parser.error("evidência fora do escopo do incidente")
+        try:
+            line = source_line(root, path, args.line)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+        observation = {"path": path, "line": args.line,
+                       "sha256": hashlib.sha256(line.encode("utf-8")).hexdigest(),
+                       "observed_at": time.time()}
+        entries = st.setdefault("inspections", [])
+        entries[:] = [i for i in entries if i.get("path") != path or i.get("line") != args.line]
+        entries.append(observation)
+        entries[:] = entries[-8:]
+        st["analysis"] = None; st["approval"] = None; st["verified"] = None
+        save_state(root, st)
+        print(f"Linha inspecionada: {path}:{args.line}; SHA256: {observation['sha256'][:16]}; conteúdo omitido por privacidade.")
         return 0
     if args.action == "verify":
         cmd = args.command
@@ -436,6 +518,11 @@ def cli(argv: list[str]) -> int:
                     "root_cause": args.root_cause, "regression": args.regression}
         if any(len(v.strip()) < 24 for v in analysis.values()):
             parser.error("cada evidência textual precisa de pelo menos 24 caracteres")
+        analysis["evidence"] = {"path": args.evidence_path, "line": args.evidence_line,
+                                "quote": args.code_quote, "failure_tag": args.failure_tag}
+        problem = evidence_problem(root, {**st, "analysis": analysis})
+        if problem:
+            parser.error(problem)
         st["analysis"] = analysis; st["approval"] = None; st["verified"] = None
         save_state(root, st)
         print("Hipótese, investigação, causa e plano de regressão registrados.")
@@ -445,8 +532,11 @@ def cli(argv: list[str]) -> int:
             parser.error("sem reprodução de falha (exit != 0) verificada por capture")
         if not st.get("probes") or not any(p.get("exit_code") == 0 for p in st["probes"]):
             parser.error("faltam diagnósticos executados com sucesso via probe")
-        if not st.get("analysis") or not all(len(str(v).strip()) >= 24 for v in st["analysis"].values()):
+        if not st.get("analysis") or not all(len(str(st["analysis"].get(k, "")).strip()) >= 24 for k in ("hypothesis", "investigation", "root_cause", "regression")):
             parser.error("faltam evidências de investigação e causa raiz")
+        problem = evidence_problem(root, st)
+        if problem:
+            parser.error(problem)
         # Approval binds selected targets' hashes and current commit. After a patch,
         # another approve is needed, to review the current worktree before a new patch.
         fingerprint = baseline(root, st["scope"])

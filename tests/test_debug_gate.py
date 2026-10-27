@@ -63,11 +63,17 @@ class DebugGateTest(unittest.TestCase):
         self.run_cli("capture", "--", sys.executable, "-m", "unittest", "test_failure" if fail else "test_success")
         self.run_cli("probe", "--", "git", "status", "--short")
 
-    def explain(self):
-        self.run_cli("explain", "--hypothesis", "a condição da função falha em entrada vazia",
-                     "--investigation", "o comando reproduziu a falha isolando o caminho de entrada",
-                     "--root-cause", "a função trata None como string de modo inconsistente",
-                     "--regression", "teste de valor ausente deverá retornar mensagem de erro")
+    def inspect(self):
+        return self.run_cli("inspect", "--path", "src/a.py", "--line", "1")
+
+    def explain(self, *, expect=0, quote="x=1", tag="AssertionError", cause=None, investigation=None):
+        self.inspect()
+        self.run_cli("explain", "--hypothesis", "o valor literal no código não corresponde à expectativa do teste",
+                     "--investigation", investigation or "Falha AssertionError reproduzida; a linha de origem foi inspecionada",
+                     "--root-cause", cause or "A atribuição x=1 no código diverge do esperado x=3 e provoca a falha do teste",
+                     "--regression", "o teste test_failure precisa passar quando x for exatamente três",
+                     "--evidence-path", "src/a.py", "--evidence-line", "1",
+                     "--code-quote", quote, "--failure-tag", tag, expect=expect)
 
     def approved(self):
         self.begin(); self.capture(); self.explain(); self.run_cli("approve")
@@ -113,7 +119,7 @@ class DebugGateTest(unittest.TestCase):
         self.forbidden(self.run_hook("Bash", "git branch -D feature"))
 
     def test_no_failure_evidence_fails(self):
-        self.begin(); self.capture(fail=False); self.explain()
+        self.begin(); self.capture(fail=False); self.run_cli("inspect", "--path", "src/a.py", "--line", "1", expect=2)
         self.run_cli("approve", expect=2)
 
     def test_explanation_missing_fails(self):
@@ -140,6 +146,9 @@ class DebugGateTest(unittest.TestCase):
         self.approved()
         (self.repo / "src" / "a.py").write_text("x=3\n")
         self.forbidden(self.run_hook("apply_patch", self.patch_a()))
+        self.run_cli("approve", expect=2)
+        self.inspect()
+        self.explain(quote="x=3", cause="A atribuição x=3 já corresponde ao esperado, mas precisamos investigar outras regressões")
         self.run_cli("approve")
         self.assertEqual(self.run_hook("apply_patch", self.patch_a()), {})
 
@@ -351,6 +360,58 @@ class DebugGateTest(unittest.TestCase):
     def test_guard_script_still_denies_before_begin_after_protection(self):
         self.run_cli("protect")
         self.forbidden(self.run_hook("apply_patch", self.patch_a()))
+
+
+    def test_absurd_moon_cheese_claim_is_rejected(self):
+        self.begin(); self.capture()
+        self.explain(cause="A lua é feita de queijo que derrete nos computadores coloridos", expect=2)
+        self.run_cli("approve", expect=2)
+        self.forbidden(self.run_hook("apply_patch", self.patch_a()))
+
+    def test_fake_failure_class_is_rejected(self):
+        self.begin(); self.capture()
+        self.explain(tag="RuntimeError", expect=2)
+        self.run_cli("approve", expect=2)
+
+    def test_fake_source_quote_is_rejected(self):
+        self.begin(); self.capture()
+        self.explain(quote="return 99999", expect=2)
+        self.run_cli("approve", expect=2)
+
+    def test_diagnostic_must_reference_actual_failure(self):
+        self.begin(); self.capture()
+        self.explain(investigation="Uma investigação longa e sem menção à categoria da falha observada", expect=2)
+
+    def test_inspect_requires_real_failed_reproduction(self):
+        self.begin()
+        self.run_cli("inspect", "--path", "src/a.py", "--line", "1", expect=2)
+
+    def test_inspect_cannot_reference_out_of_scope(self):
+        self.begin(); self.capture()
+        self.run_cli("inspect", "--path", "src/b.py", "--line", "1", expect=2)
+        self.run_cli("inspect", "--path", "../secret.py", "--line", "1", expect=2)
+
+    def test_source_changed_after_explanation_denies_approval(self):
+        self.begin(); self.capture(); self.explain()
+        (self.repo / "src" / "a.py").write_text("x=999\n")
+        self.run_cli("approve", expect=2)
+        self.forbidden(self.run_hook("apply_patch", self.patch_a()))
+
+    def test_corrupted_evidence_cannot_bypass_approval(self):
+        self.begin(); self.capture(); self.explain()
+        state = g.read_state(self.repo)
+        state["analysis"]["evidence"]["quote"] = "injected nonsense"
+        g.save_state(self.repo, state)
+        self.run_cli("approve", expect=2)
+
+    def test_probe_only_status_is_insufficient_without_inspection(self):
+        self.begin(); self.capture()
+        self.run_cli("explain", "--hypothesis", "qualquer hipótese de vinte e quatro caracteres",
+                     "--investigation", "foi visto AssertionError na investigação",
+                     "--root-cause", "a linha real citada é x=1 no escopo",
+                     "--regression", "o teste deve corrigir o valor esperado",
+                     "--evidence-path", "src/a.py", "--evidence-line", "1",
+                     "--code-quote", "x=1", "--failure-tag", "AssertionError", expect=2)
 
     def test_hook_manifest_matches_official_contract(self):
         obj = json.loads((SCRIPT.parent / "hooks.json").read_text())
